@@ -1,63 +1,70 @@
-name: build
-on: [push, pull_request]
+name: Build Aseprite on Windows
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
 jobs:
   build:
-    runs-on: ${<!-- -->{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        build_type: [Release]
-        enable_ui: [on]
-        include:
-          - os: windows-latest
-            build_type: Release
-            enable_ui: on
+    runs-on: windows-2022
+    
     steps:
-    - uses: actions/checkout&#64;v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
       with:
-        submodules: &#39;recursive&#39;
-    - name: ccache
-      uses: hendrikmuhs/ccache-action&#64;v1
-      if: runner.os &#61;&#61; &#39;Linux&#39;
+        submodules: recursive
+        fetch-depth: 0
+        # 可选择构建特定版本，如测试版1.3.17
+        # ref: v1.3.17
+    
+    - name: Set up Visual Studio environment
+      uses: ilammy/msvc-dev-cmd@v1
       with:
-        key: ${<!-- -->{ matrix.os }}-${<!-- -->{ matrix.enable_ui }}
-    - uses: seanmiddleditch/gha-setup-ninja&#64;master
-    - uses: ilammy/msvc-dev-cmd&#64;v1
-      if: runner.os &#61;&#61; &#39;Windows&#39;
-    - name: Install Dependencies
-      shell: bash
+        arch: x64
+        toolset: 14.39
+    
+    - name: Install CMake and Ninja
+      uses: lukka/get-cmake@latest
+    
+    - name: Download Skia library
       run: |
-        if [[ &#34;${<!-- -->{ runner.os }}&#34; &#61;&#61; &#34;Linux&#34; ]] ; then
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            libx11-dev libxcursor-dev libxi-dev
-        fi
-    - name: Generating Makefiles
-      shell: bash
+        mkdir -p third_party/skia
+        Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-Windows-Release-x64.zip" -OutFile "skia.zip"
+        Expand-Archive -Path "skia.zip" -DestinationPath "third_party/skia" -Force
+        Remove-Item -Path "skia.zip" -Force
+    
+    - name: Configure CMake
       run: |
-        if [[ &#34;${<!-- -->{ runner.os }}&#34; &#61;&#61; &#34;Windows&#34; ]] ; then
-          export enable_ccache&#61;off
-        else
-          export enable_ccache&#61;on
-        fi
-        curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/skia.zip --output skia.zip
-        7z x skia.zip
-        cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE&#61;${<!-- -->{ matrix.build_type }} \
-          -DENABLE_UI&#61;${<!-- -->{ matrix.enable_ui }} \
-          -DENABLE_CCACHE&#61;$enable_ccache \
-          -DLAF_BACKEND&#61;skia \
-          -DSKIA_DIR&#61;./skia \
-          -DSKIA_LIBRARY_DIR&#61;./skia/out/Release-x64 \
-          -DSKIA_LIBRARY&#61;./skia/out/Release-x64/skia.lib
-    - name: Compiling
-      shell: bash
+        mkdir -p build
+        cd build
+        cmake .. -G Ninja `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DLAF_BACKEND=skia `
+          -DSKIA_DIR="../third_party/skia" `
+          -DSKIA_LIBRARY_DIR="../third_party/skia/out/Release-x64" `
+          -DSKIA_LIBRARY="../third_party/skia/out/Release-x64/skia.lib" `
+          -DFREETYPE_LIBRARY="../third_party/skia/third_party/freetype/lib/Release/freetype.lib" `
+          -DFREETYPE_INCLUDE_DIRS="../third_party/skia/third_party/freetype/include"
+    
+    - name: Build Aseprite
       run: |
-        cd build &amp;&amp; ninja
-    - uses: actions/upload-artifact&#64;v3
+        cd build
+        ninja aseprite
+    
+    - name: Package artifacts
+      run: |
+        mkdir -p dist
+        Copy-Item -Path "build/bin/aseprite.exe" -Destination "dist/"
+        Copy-Item -Path "build/bin/aseprite.pdb" -Destination "dist/" -ErrorAction SilentlyContinue
+        Copy-Item -Path "data" -Destination "dist/" -Recurse
+        Compress-Archive -Path "dist/*" -DestinationPath "aseprite-windows.zip" -Force
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
       with:
-        name: aseprite
-        path: |
-          D:/a/aseprite/aseprite/build/bin/data
-          D:/a/aseprite/aseprite/build/bin/aseprite.exe
+        name: aseprite-windows
+        path: aseprite-windows.zip
+        retention-days: 7
