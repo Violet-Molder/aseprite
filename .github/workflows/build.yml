@@ -24,7 +24,8 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
-        toolset: 14.39
+        # 使用默认工具集版本，不指定具体版本号
+        # toolset: 14.39
     
     - name: Install CMake and Ninja
       uses: lukka/get-cmake@latest
