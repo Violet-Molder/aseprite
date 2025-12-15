@@ -1,71 +1,109 @@
-name: Build Aseprite on Windows
+# 工作流名称
+name: Build Aseprite for Windows
 
+# 触发条件：手动触发（推荐），也可以加 push 触发
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      aseprite_version:
+        description: 'Aseprite 源码版本（比如 v1.3.5）'
+        required: true
+        default: 'v1.3.5'
+      skia_version:
+        description: 'Skia 预编译版本（匹配 Aseprite，比如 m102）'
+        required: true
+        default: 'm102'
 
+# 工作流任务
 jobs:
-  build:
-    runs-on: windows-2022
-    
+  build-windows:
+    # 使用 Windows 最新版 Runner
+    runs-on: windows-latest
+    # 构建超时时间（Windows 构建较长，设为 2 小时）
+    timeout-minutes: 120
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
-        # 可选择构建特定版本，如测试版1.3.17
-        # ref: v1.3.17
-    
-    - name: Set up Visual Studio environment
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-        # 使用默认工具集版本，不指定具体版本号
-        # toolset: 14.39
-    
-    - name: Install CMake and Ninja
-      uses: lukka/get-cmake@latest
-    
-    - name: Download Skia library
-      run: |
-        mkdir -p third_party/skia
-        Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-Windows-Release-x64.zip" -OutFile "skia.zip"
-        Expand-Archive -Path "skia.zip" -DestinationPath "third_party/skia" -Force
-        Remove-Item -Path "skia.zip" -Force
-    
-    - name: Configure CMake
-      run: |
-        mkdir -p build
-        cd build
-        cmake .. -G Ninja `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DLAF_BACKEND=skia `
-          -DSKIA_DIR="../third_party/skia" `
-          -DSKIA_LIBRARY_DIR="../third_party/skia/out/Release-x64" `
-          -DSKIA_LIBRARY="../third_party/skia/out/Release-x64/skia.lib" `
-          -DFREETYPE_LIBRARY="../third_party/skia/third_party/freetype/lib/Release/freetype.lib" `
-          -DFREETYPE_INCLUDE_DIRS="../third_party/skia/third_party/freetype/include"
-    
-    - name: Build Aseprite
-      run: |
-        cd build
-        ninja aseprite
-    
-    - name: Package artifacts
-      run: |
-        mkdir -p dist
-        Copy-Item -Path "build/bin/aseprite.exe" -Destination "dist/"
-        Copy-Item -Path "build/bin/aseprite.pdb" -Destination "dist/" -ErrorAction SilentlyContinue
-        Copy-Item -Path "data" -Destination "dist/" -Recurse
-        Compress-Archive -Path "dist/*" -DestinationPath "aseprite-windows.zip" -Force
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: aseprite-windows
-        path: aseprite-windows.zip
-        retention-days: 7
+      # 步骤1：检出 GitHub Runner 自身的代码（必备）
+      - name: Checkout Runner
+        uses: actions/checkout@v4
+
+      # 步骤2：配置 Visual Studio 构建工具（Aseprite 依赖 MSVC）
+      - name: Setup Visual Studio Build Tools
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: 14.38
+          arch: x64
+
+      # 步骤3：安装依赖工具（CMake、Ninja、Python 等）
+      - name: Install Build Dependencies
+        run: |
+          # 安装 CMake（添加到 PATH）
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          # 安装 Ninja 构建工具
+          choco install ninja -y
+          # 安装 Python 3（Aseprite 构建脚本依赖）
+          choco install python -y
+          # 刷新 PATH 环境变量
+          refreshenv
+
+      # 步骤4：下载 Aseprite 源码
+      - name: Download Aseprite Source Code
+        run: |
+          # 克隆 Aseprite 源码（替换为你有权访问的 Aseprite 仓库地址）
+          git clone --depth 1 --branch ${{ github.event.inputs.aseprite_version }} https://github.com/aseprite/aseprite.git ${{ github.workspace }}\aseprite
+        env:
+          # 如果是私有仓库，需要配置 GitHub Token（在仓库 Settings -> Secrets 中添加）
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 步骤5：下载预编译的 Skia 库（Windows x64 版本）
+      - name: Download Prebuilt Skia
+        run: |
+          # 创建 Skia 目录
+          mkdir -p ${{ github.workspace }}\skia
+          cd ${{ github.workspace }}\skia
+          # 下载匹配版本的 Skia 预编译包（这里用社区维护的预编译包，可替换为自己的）
+          $skia_url = "https://github.com/aseprite/skia/releases/download/${{ github.event.inputs.skia_version }}/Skia-Windows-Release-x64.zip"
+          Invoke-WebRequest -Uri $skia_url -OutFile skia.zip
+          # 解压 Skia
+          Expand-Archive -Path skia.zip -DestinationPath . -Force
+
+      # 步骤6：配置 CMake 生成构建文件
+      - name: Configure CMake
+        run: |
+          # 创建构建目录
+          mkdir -p ${{ github.workspace }}\aseprite\build
+          cd ${{ github.workspace }}\aseprite\build
+          # 执行 CMake 配置（指定 Skia 路径、构建工具等）
+          cmake .. ^
+            -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}\aseprite\install ^
+            -DLAF_BACKEND=skia ^
+            -DSKIA_DIR=${{ github.workspace }}\skia ^
+            -DSKIA_LIBRARY_DIR=${{ github.workspace }}\skia\out\Release-x64 ^
+            -DSKIA_LIBRARY=${{ github.workspace }}\skia\out\Release-x64\skia.lib ^
+            -DUSE_SHARED_CRT=off ^
+            -DUSE_ALLEGRO4=off ^
+            -DUSE_FAKE_ALLEGRO4=on
+
+      # 步骤7：编译 Aseprite
+      - name: Build Aseprite
+        run: |
+          cd ${{ github.workspace }}\aseprite\build
+          # 执行 Ninja 编译（-j 自动适配 CPU 核心数）
+          ninja install
+
+      # 步骤8：打包构建产物（方便下载）
+      - name: Package Aseprite
+        run: |
+          # 压缩安装目录为 zip 包
+          Compress-Archive -Path ${{ github.workspace }}\aseprite\install\* -DestinationPath ${{ github.workspace }}\Aseprite-Win-${{ github.event.inputs.aseprite_version }}.zip
+
+      # 步骤9：上传构建产物为 Artifact（可在 Actions 页面下载）
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-Win-${{ github.event.inputs.aseprite_version }}
+          path: ${{ github.workspace }}\Aseprite-Win-${{ github.event.inputs.aseprite_version }}.zip
+          # Artifact 保留 30 天（可调整）
+          retention-days: 30
