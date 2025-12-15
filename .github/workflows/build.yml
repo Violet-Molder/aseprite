@@ -8,7 +8,7 @@ on:
       aseprite_version:
         description: 'Aseprite 源码版本（比如 v1.3.5）'
         required: true
-        default: 'v1.3.5'
+        default: 'v1.3.6'
       skia_version:
         description: 'Skia 预编译版本（匹配 Aseprite，比如 m102）'
         required: true
